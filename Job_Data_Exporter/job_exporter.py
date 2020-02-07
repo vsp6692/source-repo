@@ -32,8 +32,8 @@ def dbConnect(configur):
         print ("Connecting to Database " + configur.get('dbconfig','databaseName'))
         mydb = mysql.connector.connect(
             host = configur.get('dbconfig','dbhost') ,
-            user = os.environ('DB_USERNAME'),
-            passwd = os.environ('DB_PASSWORD'),
+            user = os.environ['DB_USERNAME'],
+            passwd = os.environ['DB_PASSWORD'],
             database = configur.get('dbconfig','databaseName')
         )
         print ("Connected to Database " + configur.get('dbconfig','databaseName'))
