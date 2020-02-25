@@ -63,12 +63,12 @@ def createTable(mydb):
     tables = mycursor.fetchall()
     table_list = [item for t in tables for item in t] 
 
-    if os.environ['BUILD_NAME'] not in table_list:
-        print ( "Creating table " + os.environ['BUILD_NAME'] + ".") 
-        createCmd = "CREATE TABLE " + os.environ['BUILD_NAME'] + " ( Name VARCHAR(255), Number VARCHAR(255), Division VARCHAR(255), Result VARCHAR(255), CHECK (Result in ('SUCCESS','FAILURE','UNSTABLE')), Duration TIME, `Build Time` DATETIME, `Build URL` VARCHAR(255), `Stream Name` VARCHAR(255));"
+    if os.environ['JOB_NAME'] not in table_list:
+        print ( "Creating table " + os.environ['JOB_NAME'] + ".") 
+        createCmd = "CREATE TABLE " + os.environ['JOB_NAME'] + " ( Name VARCHAR(255), Number VARCHAR(255), Division VARCHAR(255), Result VARCHAR(255), CHECK (Result in ('SUCCESS','FAILURE','UNSTABLE')), Duration TIME, `Build Time` DATETIME, `Build URL` VARCHAR(255), `Stream Name` VARCHAR(255));"
         try:
             mycursor.execute(createCmd)
-            print ( "Created table " + os.environ['BUILD_NAME'] + ".") 
+            print ( "Created table " + os.environ['JOB_NAME'] + ".") 
         except mysql.connector.Error as err:
             if err.errno == errorcode.ER_TABLE_EXISTS_ERROR:
                 print("Already exists.")
@@ -77,7 +77,7 @@ def createTable(mydb):
                 print(err.msg)  
                 sys.exit(1)                
     else:
-        print ( "Table " + os.environ['BUILD_NAME'] + " already exists, so skipping creation.")          
+        print ( "Table " + os.environ['JOB_NAME'] + " already exists, so skipping creation.")          
 
 
 def getResponses(configur):
@@ -110,7 +110,7 @@ def getResponses(configur):
         if i in apiJson["fullDisplayName"]:
             responseDict["Division"] = i
 
-    responseDict["Name"] = os.environ['BUILD_NAME']
+    responseDict["Name"] = os.environ['JOB_NAME']
     responseDict["Number"] = os.environ['BUILD_NUMBER']
     responseDict["Result"] = wfJson["status"]
     responseDict["Duration"] = time.strftime("%H:%M:%S", time.gmtime(wfJson["durationMillis"]/1000))
@@ -124,8 +124,8 @@ def alterTable(mydb, jobValue, wfJson):
     """Function creates column for each stages,
     with their suitable datatype"""
     mycursor = mydb.cursor()
-    print ("Getting Columns name from table " + os.environ['BUILD_NAME'] + ".")
-    selectCmd = 'SELECT column_name from information_schema.columns where table_schema = "build" and table_name = "' + os.environ['BUILD_NAME'] + '";'
+    print ("Getting Columns name from table " + os.environ['JOB_NAME'] + ".")
+    selectCmd = 'SELECT column_name from information_schema.columns where table_schema = "build" and table_name = "' + os.environ['JOB_NAME'] + '";'
     try:
         mycursor.execute(selectCmd)  
         columns = mycursor.fetchall()
@@ -142,7 +142,7 @@ def alterTable(mydb, jobValue, wfJson):
         if i["name"] != "Declarative: Post Actions":
             jobValue[i["name"]] = time.strftime("%H:%M:%S", time.gmtime(float(i["durationMillis"]/1000)))
             if ( i["name"] not in colums_list):
-                altCmd = "ALTER TABLE " + os.environ['BUILD_NAME'] + " ADD `" + i["name"] + "` TIME;"
+                altCmd = "ALTER TABLE " + os.environ['JOB_NAME'] + " ADD `" + i["name"] + "` TIME;"
                 try:                    
                     print("Creating New Column " + i["name"] + ".")
                     mycursor.execute(altCmd)
@@ -160,10 +160,10 @@ def insertValues(mydb,jobValue):
     columnValues = '", "'.join(jobValue.values())
 
     mycursor = mydb.cursor()
-    insertCmd = 'INSERT INTO %s ( `%s` ) VALUES ( "%s" );' % (os.environ['BUILD_NAME'], columnNames, columnValues)
+    insertCmd = 'INSERT INTO %s ( `%s` ) VALUES ( "%s" );' % (os.environ['JOB_NAME'], columnNames, columnValues)
 
     try:
-        print ("Inserting Values to the table " + os.environ['BUILD_NAME'] + ".")
+        print ("Inserting Values to the table " + os.environ['JOB_NAME'] + ".")
         mycursor.execute(insertCmd)
     except mysql.connector.Error as err:
             print(err.msg)             
