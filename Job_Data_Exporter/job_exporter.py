@@ -11,13 +11,13 @@ from configparser import ConfigParser
 
 def readConfig():
     """Function reads the configuration to
-    run the script. Its enough to change configuration 
+    run the script. Its enough to change configuration
     alone."""
 
-    if os.path.exists('config.ini'):
+    if os.path.exists('/opt/scripts/config.ini'):
         print ("Reading Config File")
         configur = ConfigParser()
-        configur.read('config.ini')
+        configur.read('/opt/scripts/config.ini')
         return configur
     else:
         print ("config.ini does not exists")
@@ -44,13 +44,14 @@ def dbConnect(configur):
             sys.exit(1)
         elif err.errno == errorcode.ER_BAD_DB_ERROR:
             print("Database does not exist")
-            sys.exit(1)            
+            sys.exit(1)
         elif err.errno == 2003:
             print("Invalid DB host address")
-            sys.exit(1)            
-        else:
-            print(err.errno)      
             sys.exit(1)
+        else:
+            print(err.errno)
+            sys.exit(1)
+
 
 def createTable(mydb):
     """Function creates tables with default colums
@@ -59,9 +60,9 @@ def createTable(mydb):
 
     print ("Getting tables list from Database.")
     mycursor = mydb.cursor()
-    mycursor.execute("SHOW TABLES")  
+    mycursor.execute("SHOW TABLES")
     tables = mycursor.fetchall()
-    table_list = [item for t in tables for item in t] 
+    table_list = [item for t in tables for item in t]
 
     if os.environ['JOB_NAME'] not in table_list:
         print ( "Creating table " + os.environ['JOB_NAME'] + ".") 
@@ -72,24 +73,24 @@ def createTable(mydb):
         except mysql.connector.Error as err:
             if err.errno == errorcode.ER_TABLE_EXISTS_ERROR:
                 print("Already exists.")
-                sys.exit(1)                
+                sys.exit(1)
             else:
-                print(err.msg)  
-                sys.exit(1)                
+                print(err.msg)
+                sys.exit(1)
     else:
         print ( "Table " + os.environ['JOB_NAME'] + " already exists, so skipping creation.")          
 
 
 def getResponses(configur):
-    """This function helps in getting response 
+    """This function helps in getting response
     from Jenkins API's"""
 
     responseDict = {}
 
-    print ( "Getting response from API URL " +os.environ['BUILD_URL'] + "/api/json." ) 
+    print ( "Getting response from API URL " +os.environ['BUILD_URL'] + "/api/json." )
     apiresponse = requests.get(os.environ['BUILD_URL'] + "/api/json")
 
-    print ( "Getting response from WFAPI URL " +os.environ['BUILD_URL'] + "/wfapi/describe." ) 
+    print ( "Getting response from WFAPI URL " +os.environ['BUILD_URL'] + "/wfapi/describe." )
     wfresponse = requests.get(os.environ['BUILD_URL'] + "/wfapi/describe")
 
     if apiresponse.status_code != 200 and wfresponse.status_code != 200:
@@ -112,7 +113,12 @@ def getResponses(configur):
 
     responseDict["Name"] = os.environ['JOB_NAME']
     responseDict["Number"] = os.environ['BUILD_NUMBER']
-    responseDict["Result"] = wfJson["status"]
+    if os.environ['FAILED_STAGE'] == 'None' or os.environ['FAILED_STAGE'] == 'None,' or os.environ['FAILED_STAGE'] == 'None':
+        responseDict["Status"] = "1"
+    elif wfJson["status"] == "UNSTABLE":
+        responseDict["Status"] = "0.5"
+    else:
+         responseDict["Status"] = "0"
     responseDict["Duration"] = time.strftime("%H:%M:%S", time.gmtime(wfJson["durationMillis"]/1000))
     responseDict["Build Time"] = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(wfJson["startTimeMillis"]/1000)))
     responseDict["Build URL"] = os.environ['BUILD_URL']
@@ -120,23 +126,23 @@ def getResponses(configur):
     return responseDict, wfJson
 
 
-def alterTable(mydb, jobValue, wfJson):
+def alterTable(configur, mydb, jobValue, wfJson):
     """Function creates column for each stages,
     with their suitable datatype"""
     mycursor = mydb.cursor()
     print ("Getting Columns name from table " + os.environ['JOB_NAME'] + ".")
     selectCmd = 'SELECT column_name from information_schema.columns where table_schema = "build" and table_name = "' + os.environ['JOB_NAME'] + '";'
     try:
-        mycursor.execute(selectCmd)  
+        mycursor.execute(selectCmd)
         columns = mycursor.fetchall()
     except mysql.connector.Error as err:
         if err.errno == errorcode.ER_TABLE_EXISTS_ERROR:
             print("Already Exists.")
-            sys.exit(1)            
+            sys.exit(1)
         else:
-            print(err.msg)    
-            sys.exit(1)            
-    colums_list = [item for t in columns for item in t] 
+            print(err.msg)
+            sys.exit(1)
+    columns_list = [item for t in columns for item in t]
 
     for i in wfJson["stages"]:
         if i["name"] != "Declarative: Post Actions":
@@ -147,9 +153,9 @@ def alterTable(mydb, jobValue, wfJson):
                     print("Creating New Column " + i["name"] + ".")
                     mycursor.execute(altCmd)
                 except mysql.connector.Error as err:
-                    print(err.msg) 
-                    sys.exit(1)                    
-    return jobValue                     
+                    print(err.msg)
+                    sys.exit(1)
+    return jobValue
 
 
 def insertValues(mydb,jobValue):
@@ -166,14 +172,14 @@ def insertValues(mydb,jobValue):
         print ("Inserting Values to the table " + os.environ['JOB_NAME'] + ".")
         mycursor.execute(insertCmd)
     except mysql.connector.Error as err:
-            print(err.msg)             
-            sys.exit(1)            
+        print(err.msg)
+        sys.exit(1)
     mydb.commit()
     print ("Inserted job data in the table.")
 
 
 def main():
-    """Main function which calls other 
+    """Main function which calls other
     functions for further proceedings"""
     jobValue = {}
 
@@ -182,7 +188,7 @@ def main():
     mydb = dbConnect(configur)
     createTable(mydb)
     jobValue, wfJson = getResponses(configur)
-    jobValue = alterTable(mydb, jobValue, wfJson)
+    jobValue = alterTable(configur, mydb, jobValue, wfJson)
     insertValues(mydb, jobValue)
     print ("Script ran successfully.")
 
