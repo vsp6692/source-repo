@@ -3,8 +3,8 @@ import requests
 import time
 import xlsxwriter
 import os
-#import mysql.connector
-#from mysql.connector import errorcode
+import mysql.connector
+from mysql.connector import errorcode
 from configparser import ConfigParser
 from datetime import datetime, timedelta
 import smtplib,ssl
@@ -28,95 +28,6 @@ def readConfig():
     else:
         print ("config.ini does not exists")
         sys.exit()
-
-
-def dbConnect(configur):
-    """This function creates DB connection
-    and returns db connection object"""
-
-    try:
-        print ("Connecting to Database " + configur.get('dbconfig','databaseName') + ".")
-        mydb = mysql.connector.connect(
-            host = configur.get('dbconfig','dbhost') ,
-            user = configur.get('dbconfig','dbuser'),
-            passwd = configur.get('dbconfig','dbpassword'),
-            database = configur.get('dbconfig','databaseName')
-        )
-        print ("Connected to Database " + configur.get('dbconfig','databaseName') + ".")
-        return mydb
-    except mysql.connector.Error as err:
-        if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
-            print("Something is wrong with your user name or password")
-            sys.exit(1)
-        elif err.errno == errorcode.ER_BAD_DB_ERROR:
-            print("Database does not exist")
-            sys.exit(1)
-        elif err.errno == 2003:
-            print("Invalid DB host address")
-            sys.exit(1)
-        else:
-            print(err.errno)
-            sys.exit(1)
-
-
-def createTable(mydb, jenkins):
-    """Function creates tables with default colums
-    for the pipeline, if not there,
-    else will skip the step."""
-
-    print ("Getting tables list from Database.")
-    mycursor = mydb.cursor()
-    mycursor.execute("SHOW TABLES")
-    tables = mycursor.fetchall()
-    table_list = [item for t in tables for item in t]
-
-    if jenkins not in table_list:
-        print ( "Creating table " + jenkins + ".")
-        createCmd = "CREATE TABLE `" + jenkins + "` ( `Job Name` VARCHAR(255), `Job Type` VARCHAR(255), \
-             `Last Build Time` DATETIME, `Node Name` VARCHAR(255), `Job URL` VARCHAR(255), `Job Status` \
-                 VARCHAR(255), `Total Count` VARCHAR(255), `Success Count` VARCHAR(255), `Failure Count `VARCHAR(255), \
-                     `Unstable Count` VARCHAR(255), `Aborted Count` VARCHAR(255), `Other Count` VARCHAR(255));"
-        try:
-            mycursor.execute(createCmd)
-            print ( "Created table " + jenkins + ".")
-        except mysql.connector.Error as err:
-            if err.errno == errorcode.ER_TABLE_EXISTS_ERROR:
-                print("Already exists.")
-                sys.exit(1)
-            else:
-                print(err.msg)
-                sys.exit(1)
-    else:
-        print ( "Table " + jenkins + " already exists, so skipping creation.")
-
-
-def insertValues(mydb, jenkins, jobData):
-    """This function inserts all values
-    from response to the database table."""
-
-    mycursor = mydb.cursor()
-    for name, types, time, node, url, jobstatus, buildCount, successCount, failureCount, unstableCount, abortedCount, otherCount in (jobData):
-        if time == "No Time":
-           insertCmd = "INSERT INTO `" + jenkins + "` (`Job Name`, `Job Type`, `Last Build Time`, \
-               `Node Name`, `Job URL`, `Job Status`, `Total Count` , `Success Count` , \
-                   `Failure Count `, `Unstable Count` , `Aborted Count` , `Other Count` ) VALUES \
-                   ('" + name + "','" + types + "',NULL,'" + node + "','" + url + "','" + \
-                       str(buildCount) + "','" + jobstatus + "');"
-        else:
-           insertCmd = "INSERT INTO `" + jenkins + "` (`Job Name`, `Job Type`, `Last Build Time`, \
-               `Node Name`, `Job URL`, `Job Status`, `Total Count` , `Success Count` , \
-                   `Failure Count `, `Unstable Count` , `Aborted Count` , `Other Count` ) VALUES \
-                   ('" + name + "','" + types + "','" + time + "','" + node + "','" + url + "','" \
-                       + str(buildCount) + "','" + jobstatus + "');"
-        try:
-            #print ("Inserting Values to the table " + name + ".")
-            mycursor.execute(insertCmd)
-        except mysql.connector.Error as err:
-                print(err.msg)
-                sys.exit(1)
-        mydb.commit()
-    print ("Inserted job data in the table.")
-
 
 def addWorkbook(workbook, jenkins, jobData):
     """Function creates workbook to
@@ -155,8 +66,9 @@ def addWorkbook(workbook, jenkins, jobData):
     worksheet.write('I1', 'Failure', titleStyle)
     worksheet.write('J1', 'Unstable', titleStyle)
     worksheet.write('K1', 'Aborted', titleStyle)
+    worksheet.write('L1', 'RTC FailedCount', titleStyle)
 
-    for name, types, time, duration, node, url, jobstatus, buildCount, successCount, failureCount, unstableCount, abortedCount in (jobData):
+    for name, types, time, duration, node, url, jobstatus, buildCount, successCount, failureCount, unstableCount, abortedCount, rtcFailedCount in (jobData):
         worksheet.write_url(row, col, url, url_format, string=name, tip='Jenkins Job URL')
         worksheet.write(row, col + 1, types, columnStyle)
         if time == 'No Time':
@@ -172,6 +84,7 @@ def addWorkbook(workbook, jenkins, jobData):
         worksheet.write(row, col + 8, failureCount, columnStyle)
         worksheet.write(row, col + 9, unstableCount, columnStyle)
         worksheet.write(row, col + 10, abortedCount, columnStyle)
+        worksheet.write(row, col + 10, rtcFailedCount, columnStyle)
         row += 1
 
     del worksheet
@@ -186,6 +99,7 @@ def getBuildCount(url):
     successCount = 0
     failureCount = 0
     abortedCount = 0
+    rtcFailedCount = 0
     unstableCount = 0
     stop_date = datetime.strptime(datetime.now().strftime("%d.%m.%Y %H:%M:%S"), "%d.%m.%Y %H:%M:%S")
     start_date = datetime.strptime((datetime.now()-timedelta(days=30)).strftime("%d.%m.%Y %H:%M:%S"), "%d.%m.%Y %H:%M:%S")
@@ -208,6 +122,12 @@ def getBuildCount(url):
                 if buildResponse['result'] == 'SUCCESS':
                     successCount += 1
                 elif buildResponse['result'] == 'FAILURE':
+                    wfapiURL = build["url"] + "wfapi/describe"
+                    wfResponse = requests.get(wfapiURL, timeout=600).json()
+                    for stages in wfResponse["stages"]:
+                        if "RTC" in stages["name"]:
+                            if stages["status"] == 'FAILURE':
+                                rtcFailedCount +=1
                     failureCount += 1
                 elif buildResponse['result'] == 'ABORTED':
                     abortedCount += 1
@@ -215,7 +135,7 @@ def getBuildCount(url):
                     unstableCount += 1
                 builds.append(build)
                 buildCount += 1
-    return (buildCount, successCount, failureCount, unstableCount, abortedCount)
+    return (buildCount, successCount, failureCount, unstableCount, abortedCount, rtcFailedCount)
 
 
 def send_mail(configur):
@@ -273,7 +193,6 @@ def buildData(jenkins):
     apiJson = getResponse(apiUrl, "json")
 
     for jobs in apiJson["jobs"]:
-      if jobs["name"]=="B8XCGR":    
         nodeName=""
 
         jobUrl =  jobs["url"] + "/api/json"
@@ -354,33 +273,28 @@ def buildData(jenkins):
 
                     buildCount, successCount, failureCount, unstableCount, abortedCount = getBuildCount(multijobs["url"])
 
-                    if multijobs["color"] != "notbuilt":
-                        checkJobCountUrl = multijobs["url"] + "api/json"
-                        checkJobJson = getResponse(checkJobCountUrl, "json")
+                    multiJobUrl = multijobs["url"] + "lastBuild/api/json"
+                    multiJobJson = getResponse(multiJobUrl, "json")
 
-                        if checkJobJson["lastBuild"]:
-                            multiJobUrl = multijobs["url"] + "lastBuild/api/json"
-                            multiJobJson = getResponse(multiJobUrl, "json")
+                    nodeUrl = multijobs["url"] + "lastBuild/consoleText"
+                    nodeText = getResponse(nodeUrl, "text")
 
-                            nodeUrl = multijobs["url"] + "lastBuild/consoleText"
-                            nodeText = getResponse(nodeUrl, "text")
-    
-                            for item in nodeText.splitlines():
-                                if "Running on" in item:
-                                    itemline = item.split(' ')
-                                    if itemline[0] == "Running":
-                                        nodeName = itemline[2]
-                                        break
-                                    else:
-                                        nodeName = itemline[3]
-                                        break
-                                      
-                            jobName = jobs["name"] + "-" + multijobs["name"]
-    
-                            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(multiJobJson["timestamp"]/1000)))
-                            duration = time.strftime("%H:%M:%S", time.gmtime(float(multiJobJson["duration"])))
-    
-                            jobData.append([jobName, "Piepline Job", timestamp, duration, nodeName.upper(), multijobs["url"], jobStatus, buildCount, successCount, failureCount, unstableCount, abortedCount])
+                    for item in nodeText.splitlines():
+                        if "Running on" in item:
+                            itemline = item.split(' ')
+                            if itemline[0] == "Running":
+                                nodeName = itemline[2]
+                                break
+                            else:
+                                nodeName = itemline[3]
+                                break
+
+                    jobName = jobs["name"] + "-" + multijobs["name"]
+
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(multiJobJson["timestamp"]/1000)))
+                    duration = time.strftime("%H:%M:%S", time.gmtime(float(multiJobJson["duration"])))
+
+                    jobData.append([jobName, "Piepline Job", timestamp, duration, nodeName.upper(), multijobs["url"], jobStatus, buildCount, successCount, failureCount, unstableCount, abortedCount])
 
         elif jobJson["_class"] == "com.tikal.jenkins.plugins.multijob.MultiJobProject":
             print ("Working on Job - " + jobs["name"])
@@ -428,10 +342,8 @@ def main():
 
     print ("Starting Script to Push Build Details")
     print ("=====================================")
-    jenkinsURL = [ "ci-jenkins-02/ebeam", "ci-jenkins-02/smarts", "ci-jenkins-02/algo"]
-
+    jenkinsURL = [ "ca1vmllsqe227"]
     configur = readConfig()
-    #mydb = dbConnect(configur)
 
     print ("Creating Jenkins_Data.xlsx Workbook.")
     workbook = xlsxwriter.Workbook('Jenkins_Data.xlsx')
@@ -439,10 +351,7 @@ def main():
     for jenkins in jenkinsURL:
         print ("-----------------------------------------------")
         jobData = buildData(jenkins)
-        sheetName=jenkins.split('/')[1]
-        addWorkbook(workbook, sheetName, jobData)
-        #createTable(mydb, jenkins)
-        #insertValues(mydb, jenkins, jobData)
+        addWorkbook(workbook, jenkins, jobData)
         print ("-----------------------------------------------")
     workbook.close()
     send_mail(configur)
